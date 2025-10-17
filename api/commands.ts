@@ -1,19 +1,57 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { VercelRequest, VercelResponse } from '@vercel/node';
 import TelegramBot from 'node-telegram-bot-api';
 import * as dotenv from 'dotenv';
+import {
+  userSessions,
+  showPurposeOptions,
+  showMaterialRequestOptions,
+  startMaterialIssue,
+  showSearchPrompt,
+  showItemSelectionList,
+  showQuantityInput,
+  showWorkItemInput,
+  showLocationInput,
+  showQtyOfWorkInput,
+  showItemActionOptions,
+  showWarehouseSelection,
+  handleWarehouseSelection,
+  showUserSearchPrompt,
+  showUserSelectionList,
+  handleUserSelection,
+  startMaterialPurchase,
+  handleCheckBalance,
+  showCheckerActionOptions,
+  handleCheckerConfirm,
+  handleCheckerCancel,
+  showApproverSearchPrompt,
+  showApproverSelectionList,
+  handleApproverSelection,
+  handleApproverApprove,
+  handleApproverReject,
+  handleRequestSubmission,
+  startPurchaseOrderProcess
+} from './handlers';
+import { findUserByTelegramId, getDoctypeSchema } from './erpnext';
 
 dotenv.config();
-const token = process.env.BOT_TOKEN || '8305223033:AAEGcYngeLYA9IUA6xIP43CUJfknN8zteKY';
 
-// ERPNext configuration
-const ERPNEXT_URL = process.env.ERPNEXT_URL;
-const ERPNEXT_API_KEY = process.env.ERPNEXT_API_KEY;
-const ERPNEXT_API_SECRET = process.env.ERPNEXT_API_SECRET;
+// ==================== CONFIGURATION ====================
+export const config = {
+  maxDuration: 30, // seconds
+};
 
-// User sessions to track conversation state
-const userSessions = new Map();
+// ==================== TOKEN VALIDATION ====================
+const token = process.env.BOT_TOKEN;
+if (!token) {
+  console.error('[CONFIG] CRITICAL: BOT_TOKEN environment variable is missing');
+  throw new Error('BOT_TOKEN environment variable is required');
+}
+console.log('[CONFIG] Bot token loaded successfully');
 
+// ==================== CORS HANDLER ====================
 const allowCors = fn => async (req, res) => {
+  console.log('[allowCors] Incoming request:', req.method, req.url);
+  
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -21,519 +59,347 @@ const allowCors = fn => async (req, res) => {
     'Access-Control-Allow-Headers',
     'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
   );
+  
   if (req.method === 'OPTIONS') {
+    console.log('[allowCors] Handling OPTIONS preflight request');
     res.status(200).end();
     return;
   }
+  
+  console.log('[allowCors] Proceeding to main handler');
   return await fn(req, res);
 };
 
-// Enhanced ERPNext API helper functions with better error handling
-const searchItems = async (searchTerm) => {
-  console.log('[searchItems] Searching for items with term:', searchTerm);
-  console.log('[searchItems] ERPNext URL:', ERPNEXT_URL);
-  
-  try {
-    console.log('[searchItems] Fetching items from ERPNext...');
-    
-    // First, let's test the API connection with a simple request
-    const testResponse = await fetch(`${ERPNEXT_URL}/api/method/frappe.auth.get_logged_user`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `token ${ERPNEXT_API_KEY}:${ERPNEXT_API_SECRET}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    console.log('[searchItems] Test API response status:', testResponse.status);
-    
-    // Check if we got HTML instead of JSON
-    const responseText = await testResponse.text();
-    console.log('[searchItems] Test API response first 200 chars:', responseText.substring(0, 200));
-    
-    if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
-      console.error('[searchItems] Received HTML instead of JSON. API endpoint might be wrong or authentication failed.');
-      return [];
-    }
-
-    // If test is successful, proceed with item search
-    const response = await fetch(`${ERPNEXT_URL}/api/resource/Item?fields=["name","item_name","item_code"]&limit_page_length=20`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `token ${ERPNEXT_API_KEY}:${ERPNEXT_API_SECRET}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    console.log('[searchItems] Main API response status:', response.status);
-    
-    if (!response.ok) {
-      console.error('[searchItems] API response not OK:', response.status, response.statusText);
-      return [];
-    }
-
-    const responseText2 = await response.text();
-    console.log('[searchItems] Raw response:', responseText2.substring(0, 500));
-    
-    let data;
-    try {
-      data = JSON.parse(responseText2);
-    } catch (parseError) {
-      console.error('[searchItems] JSON parse error:', parseError);
-      console.error('[searchItems] Response that failed to parse:', responseText2);
-      return [];
-    }
-    
-    console.log('[searchItems] Parsed data structure:', Object.keys(data));
-    
-    if (!data.data) {
-      console.log('[searchItems] No data field in response:', data);
-      return [];
-    }
-
-    // Filter items based on search term
-    const filteredItems = data.data.filter(item => {
-      const itemName = item.item_name || item.name || '';
-      const itemCode = item.item_code || item.name || '';
-      
-      return itemName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-             itemCode.toLowerCase().includes(searchTerm.toLowerCase());
-    }).slice(0, 8);
-
-    console.log('[searchItems] Filtered items:', filteredItems);
-    return filteredItems;
-    
-  } catch (error) {
-    console.error('[searchItems] Error searching items:', error.message);
-    console.error('[searchItems] Error stack:', error.stack);
-    return [];
-  }
-};
-
-// Mock data for testing - remove this when ERPNext API works
-const mockItems = [
-  { name: 'ITEM-001', item_name: 'Laptop Computer', item_code: 'ITEM-001' },
-  { name: 'ITEM-002', item_name: 'Mouse Wireless', item_code: 'ITEM-002' },
-  { name: 'ITEM-003', item_name: 'Keyboard Mechanical', item_code: 'ITEM-003' },
-  { name: 'ITEM-004', item_name: 'Monitor 24inch', item_code: 'ITEM-004' },
-  { name: 'ITEM-005', item_name: 'Webcam HD', item_code: 'ITEM-005' },
-];
-
-const mockWarehouses = [
-  { name: 'WH-001', warehouse_name: 'Main Warehouse' },
-  { name: 'WH-002', warehouse_name: 'Storage Room A' },
-  { name: 'WH-003', warehouse_name: 'Storage Room B' },
-  { name: 'WH-004', warehouse_name: 'Finished Goods' },
-];
-
-const searchItemsWithFallback = async (searchTerm) => {
-  console.log('[searchItemsWithFallback] Using fallback search for term:', searchTerm);
-  
-  // Try real API first
-  const realItems = await searchItems(searchTerm);
-  
-  if (realItems && realItems.length > 0) {
-    console.log('[searchItemsWithFallback] Using real API results');
-    return realItems;
-  }
-  
-  // Fallback to mock data
-  console.log('[searchItemsWithFallback] Using mock data as fallback');
-  const filteredMockItems = mockItems.filter(item => 
-    item.item_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.item_code.toLowerCase().includes(searchTerm.toLowerCase())
-  ).slice(0, 8);
-  
-  return filteredMockItems;
-};
-
-const searchWarehousesWithFallback = async (searchTerm) => {
-  console.log('[searchWarehousesWithFallback] Using fallback search for term:', searchTerm);
-  
-  try {
-    const response = await fetch(`${ERPNEXT_URL}/api/resource/Warehouse?fields=["name","warehouse_name"]&limit_page_length=20`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `token ${ERPNEXT_API_KEY}:${ERPNEXT_API_SECRET}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (!response.ok) {
-      console.error('[searchWarehousesWithFallback] API response not OK, using mock data');
-      return mockWarehouses.filter(wh => 
-        wh.warehouse_name.toLowerCase().includes(searchTerm.toLowerCase())
-      ).slice(0, 8);
-    }
-
-    const data = await response.json();
-    
-    if (!data.data) {
-      console.log('[searchWarehousesWithFallback] No data field, using mock data');
-      return mockWarehouses.filter(wh => 
-        wh.warehouse_name.toLowerCase().includes(searchTerm.toLowerCase())
-      ).slice(0, 8);
-    }
-
-    const filteredWarehouses = data.data.filter(warehouse => {
-      const warehouseName = warehouse.warehouse_name || warehouse.name || '';
-      return warehouseName.toLowerCase().includes(searchTerm.toLowerCase());
-    }).slice(0, 8);
-
-    return filteredWarehouses;
-    
-  } catch (error) {
-    console.error('[searchWarehousesWithFallback] Error, using mock data:', error.message);
-    return mockWarehouses.filter(wh => 
-      wh.warehouse_name.toLowerCase().includes(searchTerm.toLowerCase())
-    ).slice(0, 8);
-  }
-};
-
-const createMaterialRequest = async (materialRequestData) => {
-  console.log('[createMaterialRequest] Creating material request with data:', materialRequestData);
-  
-  // For now, just simulate success since ERPNext API might not be working
-  console.log('[createMaterialRequest] SIMULATING SUCCESS - ERPNext integration pending');
-  
-  return {
-    data: {
-      name: `MR-${Date.now()}`,
-      items: materialRequestData.items
-    }
-  };
-  
-  // Uncomment below when ERPNext API is working:
-  /*
-  try {
-    const payload = {
-      items: materialRequestData.items,
-      schedule_date: materialRequestData.scheduleDate || new Date().toISOString().split('T')[0],
-      company: materialRequestData.company || "Default Company"
-    };
-
-    console.log('[createMaterialRequest] Sending request to ERPNext...');
-    const response = await fetch(`${ERPNEXT_URL}/api/resource/Material Request`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `token ${ERPNEXT_API_KEY}:${ERPNEXT_API_SECRET}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-    
-    const result = await response.json();
-    console.log('[createMaterialRequest] ERPNext response:', result);
-    return result;
-  } catch (error) {
-    console.error('Error creating material request:', error);
-    throw error;
-  }
-  */
-};
-
-// Rest of your bot conversation functions remain the same...
-const sendWelcomeMessage = (bot, chatId) => {
-  console.log('[sendWelcomeMessage] Sending welcome message to chat:', chatId);
-  const welcomeMessage = `👋 Welcome to Tibeb Bot!\n\nPlease choose an option from the menu below:`;
-  
-  const options = {
-    reply_markup: {
-      keyboard: [
-        [{ text: '1. Create Material Request' }],
-        [{ text: '2. Create Purchase Request' }]
-      ],
-      resize_keyboard: true,
-      one_time_keyboard: false
-    }
-  };
-  
-  return bot.sendMessage(chatId, welcomeMessage, options);
-};
-
-const startMaterialRequest = (bot, chatId) => {
-  console.log('[startMaterialRequest] Starting material request for chat:', chatId);
-  userSessions.set(chatId, {
-    state: 'awaiting_item_search',
-    materialRequest: {
-      items: []
-    },
-    currentItem: {}
-  });
-  
-  const message = `📋 Creating Material Request\n\nPlease enter the item code or name to search:`;
-  return bot.sendMessage(chatId, message, {
-    reply_markup: { remove_keyboard: true }
-  });
-};
-
-const handleItemSearch = async (bot, chatId, searchTerm) => {
-  console.log('[handleItemSearch] Handling item search for chat:', chatId, 'term:', searchTerm);
-  try {
-    const items = await searchItemsWithFallback(searchTerm);
-    
-    if (items.length === 0) {
-      return bot.sendMessage(chatId, `❌ No items found for "${searchTerm}". Please try a different search term:`, {
-        reply_markup: { remove_keyboard: true }
-      });
-    }
-    
-    // Create custom keyboard with search results as buttons
-    const keyboard = items.map(item => [{ 
-      text: `${item.item_code || item.name} - ${item.item_name || item.name}` 
-    }]);
-    
-    keyboard.push([{ text: '❌ Cancel Search' }]);
-    
-    const options = {
-      reply_markup: {
-        keyboard: keyboard,
-        resize_keyboard: true,
-        one_time_keyboard: true
-      }
-    };
-    
-    return bot.sendMessage(chatId, `🔍 Search results for "${searchTerm}":\n\nPlease select an item from the buttons below:`, options);
-  } catch (error) {
-    console.error('Error handling item search:', error);
-    return bot.sendMessage(chatId, '❌ Error searching for items. Please try again:');
-  }
-};
-
-// ... (keep all the other functions the same as in your previous working version)
-// [Include all the other functions: handleItemSelection, handleQuantityInput, handleWarehouseSearch, handleWarehouseSelection, handleFinishMaterialRequest, cancelMaterialRequest]
-
-const handleItemSelection = async (bot, chatId, itemName) => {
-  console.log('[handleItemSelection] Item selected for chat:', chatId, 'itemName:', itemName);
-  const session = userSessions.get(chatId);
-  if (!session) return;
-  
-  session.currentItem.item_code = itemName.split(' - ')[0]; // Extract item code from button text
-  session.state = 'awaiting_quantity';
-  userSessions.set(chatId, session);
-  
-  return bot.sendMessage(chatId, `✅ Item selected: ${itemName}\n\nPlease enter the quantity required:`, {
-    reply_markup: { remove_keyboard: true }
-  });
-};
-
-const handleQuantityInput = (bot, chatId, quantity) => {
-  console.log('[handleQuantityInput] Quantity input for chat:', chatId, 'quantity:', quantity);
-  const session = userSessions.get(chatId);
-  if (!session) return;
-  
-  const qty = parseFloat(quantity);
-  if (isNaN(qty) || qty <= 0) {
-    return bot.sendMessage(chatId, '❌ Please enter a valid quantity (number greater than 0):');
-  }
-  
-  session.currentItem.qty = qty;
-  session.state = 'awaiting_warehouse_search';
-  userSessions.set(chatId, session);
-  
-  return bot.sendMessage(chatId, `✅ Quantity: ${qty}\n\nPlease enter warehouse name to search:`, {
-    reply_markup: { remove_keyboard: true }
-  });
-};
-
-const handleWarehouseSearch = async (bot, chatId, searchTerm) => {
-  console.log('[handleWarehouseSearch] Handling warehouse search for chat:', chatId, 'term:', searchTerm);
-  try {
-    const warehouses = await searchWarehousesWithFallback(searchTerm);
-    
-    if (warehouses.length === 0) {
-      return bot.sendMessage(chatId, `❌ No warehouses found for "${searchTerm}". Please try a different search term:`, {
-        reply_markup: { remove_keyboard: true }
-      });
-    }
-    
-    const keyboard = warehouses.map(warehouse => [{ 
-      text: warehouse.warehouse_name || warehouse.name 
-    }]);
-    
-    keyboard.push([{ text: '❌ Cancel Search' }]);
-    
-    const options = {
-      reply_markup: {
-        keyboard: keyboard,
-        resize_keyboard: true,
-        one_time_keyboard: true
-      }
-    };
-    
-    return bot.sendMessage(chatId, `🏭 Warehouse search results for "${searchTerm}":\n\nPlease select a warehouse from the buttons below:`, options);
-  } catch (error) {
-    console.error('Error handling warehouse search:', error);
-    return bot.sendMessage(chatId, '❌ Error searching for warehouses. Please try again:');
-  }
-};
-
-const handleWarehouseSelection = (bot, chatId, warehouseName) => {
-  console.log('[handleWarehouseSelection] Warehouse selected for chat:', chatId, 'warehouseName:', warehouseName);
-  const session = userSessions.get(chatId);
-  if (!session) return;
-  
-  session.currentItem.warehouse = warehouseName;
-  session.materialRequest.items.push({
-    item_code: session.currentItem.item_code,
-    qty: session.currentItem.qty,
-    warehouse: session.currentItem.warehouse
-  });
-  
-  session.state = 'awaiting_add_more';
-  userSessions.set(chatId, session);
-  
-  const itemSummary = `✅ Item added:\n- Item: ${session.currentItem.item_code}\n- Quantity: ${session.currentItem.qty}\n- Warehouse: ${session.currentItem.warehouse}`;
-  
-  const options = {
-    reply_markup: {
-      keyboard: [
-        [{ text: '➕ Add Another Item' }],
-        [{ text: '✅ Finish & Save' }],
-        [{ text: '❌ Cancel Request' }]
-      ],
-      resize_keyboard: true,
-      one_time_keyboard: true
-    }
-  };
-  
-  return bot.sendMessage(chatId, `${itemSummary}\n\nWhat would you like to do next?`, options);
-};
-
-const handleFinishMaterialRequest = async (bot, chatId) => {
-  console.log('[handleFinishMaterialRequest] Finishing material request for chat:', chatId);
-  const session = userSessions.get(chatId);
-  if (!session) return;
-  
-  try {
-    const result = await createMaterialRequest(session.materialRequest);
-    userSessions.delete(chatId);
-    
-    let summaryMessage = `✅ Material Request Created Successfully!\n\n📋 Request Summary:\n`;
-    session.materialRequest.items.forEach((item, index) => {
-      summaryMessage += `\n${index + 1}. ${item.item_code} - Qty: ${item.qty} - Warehouse: ${item.warehouse}`;
-    });
-    
-    summaryMessage += `\n\n📄 Reference: ${result.data?.name || 'Pending'}`;
-    
-    await bot.sendMessage(chatId, summaryMessage, {
-      reply_markup: { remove_keyboard: true }
-    });
-    
-    return sendWelcomeMessage(bot, chatId);
-    
-  } catch (error) {
-    console.error('[handleFinishMaterialRequest] Error creating material request:', error);
-    userSessions.delete(chatId);
-    await bot.sendMessage(chatId, '❌ Error creating material request. Please try again.', {
-      reply_markup: { remove_keyboard: true }
-    });
-    return sendWelcomeMessage(bot, chatId);
-  }
-};
-
-const cancelMaterialRequest = (bot, chatId) => {
-  console.log('[cancelMaterialRequest] Canceling material request for chat:', chatId);
-  userSessions.delete(chatId);
-  return bot.sendMessage(chatId, '❌ Material request cancelled.', {
-    reply_markup: { remove_keyboard: true }
-  }).then(() => sendWelcomeMessage(bot, chatId));
-};
-
-// [Keep the handler function the same as before]
+// ==================== MAIN HANDLER ====================
 const handler = async (req: VercelRequest, res: VercelResponse) => {
-  console.log('[handler] Received request:', { 
-    method: req.method, 
-    query: req.query, 
-    body: req.body 
-  });
+  console.log('[handler] START - Method:', req.method, 'URL:', req.url, 'Timestamp:', new Date().toISOString());
+
+  // Log environment info (without sensitive data)
+  console.log('[handler] Environment check - NODE_ENV:', process.env.NODE_ENV, 'BOT_TOKEN exists:', !!process.env.BOT_TOKEN);
 
   if (req.method === 'GET') {
-    return res.status(200).json({ 
-      status: 'Bot is running', 
-      message: 'Tibeb Bot webhook is active' 
+    console.log('[handler] Health check requested');
+    return res.status(200).json({
+      status: 'Bot is running',
+      message: 'Tibeb Design & Build Bot is active',
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development'
     });
   }
 
+  // Log request body (safely)
+  console.log('[handler] Request body received:', {
+    hasMessage: !!req.body?.message,
+    hasCallbackQuery: !!req.body?.callback_query,
+    messageFrom: req.body?.message?.from?.username || req.body?.message?.from?.id,
+    callbackFrom: req.body?.callback_query?.from?.username || req.body?.callback_query?.from?.id,
+    callbackData: req.body?.callback_query?.data
+  });
+
   const { body } = req;
-
-  if (!body || !body.update_id) {
-    return res.status(400).json({ error: 'Not a Telegram update' });
-  }
-
-  const bot = new TelegramBot(token);
-  const { message } = body;
+  const bot = new TelegramBot(token, { polling: false });
 
   try {
-    if (message) {
-      const { chat, text, from } = message;
+    if (body.message) {
+      const { chat, text, from } = body.message;
       const chatId = chat.id;
       const session = userSessions.get(chatId);
 
-      console.log('[handler] Processing message:', { 
-        from: from?.first_name, 
-        chatId, 
-        text,
-        sessionState: session?.state 
-      });
+      console.log('[handler] Processing message - Chat ID:', chatId, 'Text:', text, 'Session exists:', !!session);
 
-      if (text === '❌ Cancel Search' || text === '❌ Cancel Request') {
-        return cancelMaterialRequest(bot, chatId);
-      }
+      // Find user in ERPNext to get their full name
+      const erpUser = await findUserByTelegramId(from.id.toString());
+      console.log('[handler] ERP User lookup - Telegram ID:', from.id, 'Found:', !!erpUser);
 
-      if (session) {
-        switch (session.state) {
-          case 'awaiting_item_search':
-            await handleItemSearch(bot, chatId, text);
-            break;
-          case 'awaiting_quantity':
-            await handleQuantityInput(bot, chatId, text);
-            break;
-          case 'awaiting_warehouse_search':
-            await handleWarehouseSearch(bot, chatId, text);
-            break;
-          case 'awaiting_add_more':
-            if (text === '➕ Add Another Item') {
-              session.state = 'awaiting_item_search';
-              session.currentItem = {};
-              userSessions.set(chatId, session);
-              await startMaterialRequest(bot, chatId);
-            } else if (text === '✅ Finish & Save') {
-              await handleFinishMaterialRequest(bot, chatId);
-            }
-            break;
-          default:
-            if (session.state === 'awaiting_item_search' && text !== '❌ Cancel Search') {
-              await handleItemSelection(bot, chatId, text);
-            } else if (session.state === 'awaiting_warehouse_search' && text !== '❌ Cancel Search') {
-              await handleWarehouseSelection(bot, chatId, text);
-            }
-            break;
-        }
+      const userInfo = {
+        username: from?.username,
+        userid: from?.id?.toString(),
+        full_name: erpUser?.full_name || `${from?.first_name || ''} ${from?.last_name || ''}`.trim() || from?.username
+      };
+
+      console.log('[handler] User info:', userInfo.full_name, 'Chat ID:', chatId, 'Text:', text);
+
+      if (text === '/getschema') {
+        console.log('[handler] DEBUG: Getting User doctype schema');
+        const schema = await getDoctypeSchema('User');
+        console.log('[handler] DEBUG: User Schema:', JSON.stringify(schema, null, 2));
+        bot.sendMessage(chatId, 'Check the console logs for the User schema.');
         return res.status(200).json({ status: 'ok' });
       }
 
-      if (text === '/start' || text === '/menu' || text === 'Menu') {
-        await sendWelcomeMessage(bot, chatId);
-      } 
-      else if (text === '1. Create Material Request' || text === '1') {
-        await startMaterialRequest(bot, chatId);
+      if (text === '/start') {
+        console.log('[handler] Starting new session for user:', userInfo.full_name);
+        await showPurposeOptions(chatId, bot, userInfo);
+        console.log('[handler] Start flow completed');
+        return res.status(200).json({ status: 'ok' });
       }
-      else if (text === '2. Create Purchase Request' || text === '2') {
-        await bot.sendMessage(chatId, '🛒 Purchase Request functionality coming soon!');
-        await sendWelcomeMessage(bot, chatId);
+
+      if (session) {
+        console.log('[handler] Session state:', session.state);
+        switch (session.state) {
+          case 'awaiting_item_selection':
+            console.log('[handler] Processing item selection with text:', text);
+            await showItemSelectionList(bot, chatId, text);
+            break;
+          case 'awaiting_quantity':
+            const qty = parseFloat(text);
+            console.log('[handler] Processing quantity input:', text, 'Parsed:', qty);
+            if (!isNaN(qty) && qty > 0) {
+              session.currentItem.qty = qty;
+              await showWorkItemInput(bot, chatId);
+            } else {
+              console.log('[handler] Invalid quantity input:', text);
+              bot.sendMessage(chatId, 'Invalid quantity. Please enter a positive number.');
+            }
+            break;
+          case 'awaiting_work_item':
+            console.log('[handler] Processing work item input:', text);
+            session.currentItem.work_item = text;
+            await showLocationInput(bot, chatId);
+            break;
+          case 'awaiting_location':
+            console.log('[handler] Processing location input:', text);
+            session.currentItem.location = text;
+            await showQtyOfWorkInput(bot, chatId);
+            break;
+          case 'awaiting_qty_of_work':
+            console.log('[handler] Processing quantity of work input:', text);
+            session.currentItem.qty_of_work = text;
+            session.requestData.items.push(session.currentItem);
+            session.currentItem = {};
+            await showItemActionOptions(bot, chatId);
+            break;
+          case 'awaiting_user_search':
+            console.log('[handler] Processing user search:', text);
+            await showUserSelectionList(bot, chatId, text);
+            break;
+          case 'awaiting_approver_search':
+            console.log('[handler] Processing approver search:', text);
+            if (session.requestId) {
+              await showApproverSelectionList(bot, chatId, session.requestId, text);
+            } else {
+              bot.sendMessage(chatId, '❌ Could not find the request ID. Please start over.');
+            }
+            break;
+          default:
+            console.log('[handler] Unknown session state:', session.state);
+        }
+      } else {
+        console.log('[handler] No session found for chat ID:', chatId);
       }
-      else {
-        await sendWelcomeMessage(bot, chatId);
+    } else if (body.callback_query) {
+      const { message, data, from } = body.callback_query;
+      const chatId = message.chat.id;
+      const session = userSessions.get(chatId);
+
+      console.log('[handler] Processing callback - Chat ID:', chatId, 'Data:', data, 'Session exists:', !!session);
+
+      // Find user in ERPNext to get their full name
+      const erpUser = await findUserByTelegramId(from.id.toString());
+      console.log('[handler] Callback ERP User lookup - Telegram ID:', from.id, 'Found:', !!erpUser);
+
+      const userInfo = {
+        username: from?.username,
+        userid: from?.id?.toString(),
+        full_name: erpUser?.full_name || `${from?.first_name || ''} ${from?.last_name || ''}`.trim() || from?.username
+      };
+
+      console.log('[handler] Callback from:', userInfo.full_name, 'Chat ID:', chatId, 'Data:', data);
+
+      if (data.startsWith('item_page:')) {
+        const [, page, searchTerm] = data.split(':');
+        console.log('[handler] Handling item pagination - Page:', page, 'Search:', searchTerm);
+        await showItemSelectionList(bot, chatId, searchTerm, parseInt(page, 10));
+      } else if (data.startsWith('select_item:')) {
+        const itemCode = data.split(':')[1];
+        console.log('[handler] Handling item selection:', itemCode);
+        const selectedItem = session?.availableItems?.find(item => item.item_code === itemCode);
+        if (selectedItem) {
+          await showQuantityInput(bot, chatId, itemCode, selectedItem.item_name, selectedItem.stock_uom);
+        } else {
+          console.log('[handler] Selected item not found in session:', itemCode);
+        }
+      } else if (data.startsWith('select_warehouse:')) {
+        const warehouseName = data.split(':')[1];
+        console.log('[handler] Handling warehouse selection:', warehouseName);
+        await handleWarehouseSelection(bot, chatId, warehouseName);
+      } else if (data.startsWith('select_user:')) {
+        const userName = data.split(':')[1];
+        console.log('[handler] Handling user selection:', userName);
+        await handleUserSelection(bot, chatId, userName);
+      } else if (data.startsWith('user_page:')) {
+        const [, page, searchTerm] = data.split(':');
+        console.log('[handler] Handling user pagination - Page:', page, 'Search:', searchTerm);
+        await showUserSelectionList(bot, chatId, searchTerm, parseInt(page, 10));
+      } else if (data.startsWith('check_balance:')) {
+        const requestId = data.split(':')[1];
+        console.log('[handler] Handling balance check for request:', requestId);
+        await handleCheckBalance(bot, chatId, requestId);
+      } else if (data.startsWith('checker_action:')) {
+        const requestId = data.split(':')[1];
+        console.log('[handler] Showing checker actions for request:', requestId);
+        await showCheckerActionOptions(bot, chatId, requestId);
+      } else if (data.startsWith('checker_confirm:')) {
+        const requestId = data.split(':')[1];
+        console.log('[handler] Handling checker confirmation for request:', requestId);
+        await handleCheckerConfirm(bot, chatId, requestId);
+      } else if (data.startsWith('checker_cancel:')) {
+        const requestId = data.split(':')[1];
+        console.log('[handler] Handling checker cancellation for request:', requestId);
+        await handleCheckerCancel(bot, chatId, requestId);
+      } else if (data.startsWith('approver_approve:')) {
+        const requestId = data.split(':')[1];
+        console.log('[handler] Handling approver approval for request:', requestId);
+        await handleApproverApprove(bot, chatId, requestId);
+      } else if (data.startsWith('approver_reject:')) {
+        const requestId = data.split(':')[1];
+        console.log('[handler] Handling approver rejection for request:', requestId);
+        await handleApproverReject(bot, chatId, requestId);
+      } else if (data.startsWith('select_approver:')) {
+        const [, requestId, approverName] = data.split(':');
+        console.log('[handler] Handling approver selection for request:', requestId, 'Approver:', approverName);
+        await handleApproverSelection(bot, chatId, requestId, approverName);
+      } else if (data.startsWith('approver_page:')) {
+        const [, requestId, page, searchTerm] = data.split(':');
+        console.log('[handler] Handling approver pagination - Request:', requestId, 'Page:', page, 'Search:', searchTerm);
+        await showApproverSelectionList(bot, chatId, requestId, searchTerm, parseInt(page, 10));
+      } else if (data.startsWith('submit_request:')) {
+        const requestId = data.split(':')[1];
+        console.log('[handler] Handling request submission:', requestId);
+        await handleRequestSubmission(bot, chatId, requestId);
+      } else {
+        console.log('[handler] Handling general callback data:', data);
+        switch (data) {
+          case 'material_request':
+            console.log('[handler] Starting material request flow');
+            await showMaterialRequestOptions(chatId, bot);
+            break;
+          case 'material_issue':
+            console.log('[handler] Starting material issue flow');
+            await startMaterialIssue(bot, chatId, userInfo);
+            break;
+          case 'material_purchase':
+            console.log('[handler] Starting material purchase flow');
+            await startMaterialPurchase(bot, chatId, userInfo);
+            break;
+          case 'create_purchase_order':
+            console.log('[handler] Starting purchase order flow');
+            await startPurchaseOrderProcess(bot, chatId, userInfo);
+            break;
+          case 'search_items':
+            console.log('[handler] Showing search prompt');
+            await showSearchPrompt(bot, chatId);
+            break;
+          case 'show_all_items':
+            console.log('[handler] Showing all items');
+            await showItemSelectionList(bot, chatId, '');
+            break;
+          case 'back_to_item_options':
+            console.log('[handler] Returning to item options');
+            await startMaterialIssue(bot, chatId, userInfo);
+            break;
+          case 'back_to_items':
+            console.log('[handler] Returning to items list');
+            await showItemSelectionList(bot, chatId, session?.searchTerm, session?.currentPage);
+            break;
+          case 'back_to_quantity':
+            console.log('[handler] Returning to quantity input');
+            const lastItem = session?.currentItem;
+            if (lastItem) {
+              await showQuantityInput(bot, chatId, lastItem.item_code, lastItem.item_name, lastItem.uom);
+            }
+            break;
+          case 'back_to_work_item':
+            console.log('[handler] Returning to work item input');
+            await showWorkItemInput(bot, chatId);
+            break;
+          case 'back_to_location':
+            console.log('[handler] Returning to location input');
+            await showLocationInput(bot, chatId);
+            break;
+          case 'add_another_item':
+            console.log('[handler] Adding another item');
+            await startMaterialIssue(bot, chatId, userInfo);
+            break;
+          case 'finish_items':
+            console.log('[handler] Finishing items, showing warehouse selection');
+            await showWarehouseSelection(bot, chatId);
+            break;
+          
+            case 'search_users':
+              await showUserSearchPrompt(bot, chatId);
+              break;
+  
+          
+          case 'back_to_item_action':
+            console.log('[handler] Returning to item action options');
+            await showItemActionOptions(bot, chatId);
+            break;
+          case 'back_to_warehouses':
+            console.log('[handler] Returning to warehouse selection');
+            await showWarehouseSelection(bot, chatId);
+            break;
+          case 'back_to_warehouse_selection':
+            console.log('[handler] Returning to warehouse selection');
+            await showWarehouseSelection(bot, chatId);
+            break;
+          case 'back_to_user_search':
+            console.log('[handler] Returning to user search');
+            await showUserSearchPrompt(bot, chatId);
+            break;
+          case 'back_to_approver_search':
+            console.log('[handler] Returning to approver search');
+            const requestId = data.split(':')[1];
+            await showApproverSearchPrompt(bot, chatId, requestId);
+            break;
+          case 'cancel_process':
+            console.log('[handler] Cancelling process for chat ID:', chatId);
+            userSessions.delete(chatId);
+            await showPurposeOptions(chatId, bot, userInfo);
+            break;
+          case 'back_to_main':
+            console.log('[handler] Returning to main menu');
+            await showPurposeOptions(chatId, bot, userInfo);
+            break;
+          case 'view_status':
+            console.log('[handler] View status requested');
+            bot.sendMessage(chatId, 'This feature is coming soon!');
+            break;
+          case 'help_support':
+            console.log('[handler] Help/support requested');
+            bot.sendMessage(chatId, 'For help, please contact our support team.');
+            break;
+          default:
+            console.log('[handler] Unknown callback data:', data);
+        }
       }
+    } else {
+      console.log('[handler] No message or callback_query in request body');
     }
 
+    console.log('[handler] SUCCESS - Request processed successfully');
     return res.status(200).json({ status: 'ok' });
-    
   } catch (error) {
-    console.error('[handler] Error processing request:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    console.error('[handler] ERROR:', error);
+    console.error('[handler] Error stack:', error.stack);
+    console.error('[handler] Request that caused error:', {
+      method: req.method,
+      url: req.url,
+      body: {
+        hasMessage: !!req.body?.message,
+        hasCallbackQuery: !!req.body?.callback_query,
+        messageFrom: req.body?.message?.from?.username || req.body?.message?.from?.id,
+        callbackFrom: req.body?.callback_query?.from?.username || req.body?.callback_query?.from?.id
+      }
+    });
+    
+    return res.status(500).json({ 
+      status: 'error', 
+      message: 'Internal Server Error',
+      error: error.message 
+    });
   }
 };
 
+console.log('[INIT] Bot handler initialized successfully');
 export default allowCors(handler);
