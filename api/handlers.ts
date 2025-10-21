@@ -53,6 +53,9 @@ type SimpleSession = {
 /**
  * FLOW 1: Show main purpose options
  */
+/**
+ * FLOW 1: Show main purpose options
+ */
 export const showPurposeOptions = async (chatId, bot, userInfo = {}) => {
   console.log('[showPurposeOptions] Showing purpose options to chat:', chatId);
   
@@ -64,7 +67,8 @@ export const showPurposeOptions = async (chatId, bot, userInfo = {}) => {
 🌟 *Your digital assistant for seamless transactions!*
 
 📋 *Available Services:*
-• Material request management
+• Maintenance request management
+• Material request management  
 • Real-time status tracking  
 • Quick digital approvals
 • Instant notifications
@@ -75,6 +79,7 @@ export const showPurposeOptions = async (chatId, bot, userInfo = {}) => {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [
+        [{ text: '🐛 CREATE MAINTENANCE REQUEST', callback_data: 'issue_request' }],
         [{ text: '🛒 CREATE MATERIAL REQUEST', callback_data: 'material_request' }],
         [{ text: '📦 CREATE PURCHASE ORDER', callback_data: 'create_purchase_order' }],
         [{ text: '📊 VIEW REQUEST STATUS', callback_data: 'view_status' }],

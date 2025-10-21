@@ -32,6 +32,18 @@ import {
   startPurchaseOrderProcess
 } from './handlers';
 import { findUserByTelegramId, getDoctypeSchema } from './erpnext';
+import { 
+  createIssueInERPNext, 
+  handleIssueDescription, 
+  handleIssueSubject, 
+  handleIssueType, 
+  handleDeviceType,
+  handleImageAttachment,
+  skipImageAttachment,
+  showIssueConfirmation, 
+  showIssueEditOptions, 
+  startIssueCreation
+} from './issue_handler';
 
 dotenv.config();
 
@@ -101,7 +113,7 @@ const handler = async (req: VercelRequest, res: VercelResponse) => {
 
   try {
     if (body.message) {
-      const { chat, text, from } = body.message;
+      const { chat, text, from, photo } = body.message;
       const chatId = chat.id;
       const session = userSessions.get(chatId);
 
@@ -179,6 +191,26 @@ const handler = async (req: VercelRequest, res: VercelResponse) => {
               await showApproverSelectionList(bot, chatId, session.requestId, text);
             } else {
               bot.sendMessage(chatId, '❌ Could not find the request ID. Please start over.');
+            }
+            break;
+          case 'awaiting_issue_subject':
+            console.log('[handler] Processing issue subject input:', text);
+            await handleIssueSubject(bot, chatId, text);
+            break;
+          case 'awaiting_description':
+            console.log('[handler] Processing issue description input:', text);
+            await handleIssueDescription(bot, chatId, text);
+            break;
+          case 'awaiting_image_attachment':
+            if (text?.toLowerCase() === 'skip') {
+              console.log('[handler] Skipping image attachment');
+              await skipImageAttachment(bot, chatId);
+            } else if (photo) {
+              console.log('[handler] Processing image attachment');
+              await handleImageAttachment(bot, chatId, photo);
+            } else {
+              console.log('[handler] Invalid input for image attachment');
+              bot.sendMessage(chatId, 'Please send a photo or type "skip" to continue without an image.');
             }
             break;
           default:
@@ -325,12 +357,9 @@ const handler = async (req: VercelRequest, res: VercelResponse) => {
             console.log('[handler] Finishing items, showing warehouse selection');
             await showWarehouseSelection(bot, chatId);
             break;
-          
-            case 'search_users':
-              await showUserSearchPrompt(bot, chatId);
-              break;
-  
-          
+          case 'search_users':
+            await showUserSearchPrompt(bot, chatId);
+            break;
           case 'back_to_item_action':
             console.log('[handler] Returning to item action options');
             await showItemActionOptions(bot, chatId);
@@ -368,6 +397,81 @@ const handler = async (req: VercelRequest, res: VercelResponse) => {
           case 'help_support':
             console.log('[handler] Help/support requested');
             bot.sendMessage(chatId, 'For help, please contact our support team.');
+            break;
+          // ==================== ISSUE CREATION CALLBACKS ====================
+          case 'issue_request':
+            console.log('[handler] Starting issue creation flow');
+            await startIssueCreation(bot, chatId, userInfo);
+            break;
+          case 'back_to_issue_subject':
+            console.log('[handler] Returning to issue subject');
+            await startIssueCreation(bot, chatId, userInfo);
+            break;
+          case 'issue_type_software':
+          case 'issue_type_hardware':
+          case 'issue_type_performance':
+          case 'issue_type_fan':
+          case 'issue_type_bluescreen':
+            console.log('[handler] Handling issue type:', data);
+            await handleIssueType(bot, chatId, data);
+            break;
+          case 'device_type_laptop':
+          case 'device_type_desktop':
+          case 'device_type_printer':
+            console.log('[handler] Handling device type:', data);
+            await handleDeviceType(bot, chatId, data);
+            break;
+          case 'skip_image_attachment':
+            console.log('[handler] Skipping image attachment');
+            await skipImageAttachment(bot, chatId);
+            break;
+          case 'back_to_issue_type':
+            console.log('[handler] Returning to issue type');
+            await handleIssueSubject(bot, chatId, session?.requestData?.subject);
+            break;
+          case 'back_to_device_type':
+            console.log('[handler] Returning to device type');
+            await handleIssueType(bot, chatId, session?.requestData?.issue_type);
+            break;
+          case 'back_to_image_attachment':
+            console.log('[handler] Returning to image attachment');
+            await handleDeviceType(bot, chatId, session?.requestData?.device_type);
+            break;
+          case 'back_to_description':
+            console.log('[handler] Returning to description');
+            await skipImageAttachment(bot, chatId);
+            break;
+          case 'confirm_issue_creation':
+            console.log('[handler] Confirming issue creation');
+            await createIssueInERPNext(bot, chatId);
+            break;
+          case 'edit_issue_details':
+            console.log('[handler] Showing edit options');
+            await showIssueEditOptions(bot, chatId);
+            break;
+          case 'edit_issue_subject':
+            console.log('[handler] Editing issue subject');
+            await startIssueCreation(bot, chatId, userInfo);
+            break;
+          case 'edit_issue_type':
+            console.log('[handler] Editing issue type');
+            await handleIssueSubject(bot, chatId, session?.requestData?.subject);
+            break;
+          case 'edit_device_type':
+            console.log('[handler] Editing device type');
+            await handleIssueType(bot, chatId, session?.requestData?.issue_type);
+            break;
+          case 'edit_issue_description':
+            console.log('[handler] Editing issue description');
+            await skipImageAttachment(bot, chatId);
+            break;
+          case 'edit_image_attachment':
+            console.log('[handler] Editing image attachment');
+            await handleDeviceType(bot, chatId, session?.requestData?.device_type);
+            break;
+          case 'back_to_issue_confirmation':
+            console.log('[handler] Returning to issue confirmation');
+            await showIssueConfirmation(bot, chatId);
             break;
           default:
             console.log('[handler] Unknown callback data:', data);
