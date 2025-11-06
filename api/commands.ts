@@ -442,8 +442,10 @@ const cancelMaterialRequest = (bot, chatId) => {
 
 // [Keep the handler function the same as before]
 const handler = async (req: VercelRequest, res: VercelResponse) => {
-  console.log('[handler] Received request:', { 
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] [handler] Received request:`, { 
     method: req.method, 
+    url: req.url,
     query: req.query, 
     body: req.body 
   });
